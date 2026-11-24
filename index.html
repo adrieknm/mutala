@@ -31,6 +31,20 @@ input{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--b
 #pg{width:64px;text-align:center;flex:none}
 #q{flex:1 1 140px}
 #tot,#fc{flex:none;white-space:nowrap;opacity:.8}
+
+#dlg{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center;padding-top:env(safe-area-inset-top,0px);z-index:20}
+.panel{background:var(--bar);width:100%;max-width:520px;max-height:88%;overflow:auto;border-radius:16px 16px 0 0;padding:14px 14px calc(14px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:10px}
+.ph{display:flex;justify-content:space-between;align-items:center}
+.tabs{display:flex;gap:6px}.tabs button{flex:1}
+.pane{display:flex;flex-direction:column;gap:10px}.pane p{margin:0;opacity:.8}
+.main{background:var(--ac);color:var(--on);border-color:var(--ac)}
+.main:disabled{opacity:.45}
+.btn{text-align:center}
+select{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--bd);border-radius:10px;padding:8px 10px;min-height:40px}
+#mlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+#mlist li{display:flex;gap:6px;align-items:center}
+#mlist li span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#st{margin:0;min-height:1.4em}
 </style>
 </head>
 <body>
@@ -47,6 +61,7 @@ input{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--b
   <button class="sw" data-c="#1f4fd8" style="background:#1f4fd8" aria-label="Biru"></button>
   <span class="sp"></span>
   <button id="find">Cari</button>
+  <button id="tl">Alat</button>
   <button id="undo">Urungkan</button>
   <label class="btn" for="file">Buka PDF</label>
   <input id="file" type="file" accept="application/pdf" hidden>
@@ -70,13 +85,39 @@ input{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--b
   <button id="zo">−</button><button id="zi">+</button>
 </div>
 
+<div id="dlg" hidden>
+ <div class="panel">
+  <div class="ph"><strong>Alat PDF</strong><button id="dx">Tutup</button></div>
+  <div class="tabs"><button data-tab="gabung" class="on">Gabung</button><button data-tab="pisah">Pisah</button><button data-tab="kompres">Kompres</button></div>
+  <div class="pane" id="p-gabung">
+    <p>Pilih beberapa PDF, atur urutannya, lalu gabungkan.</p>
+    <label class="btn" for="mfile">Tambah file PDF</label><input id="mfile" type="file" accept="application/pdf" multiple hidden>
+    <ul id="mlist"></ul>
+    <button id="mgo" class="main" disabled>Gabung &amp; unduh</button>
+  </div>
+  <div class="pane" id="p-pisah" hidden>
+    <p>Memakai PDF yang sedang dibuka. Contoh isian halaman: 1-3, 5, 8-</p>
+    <select id="smode"><option value="ambil">Ambil halaman ini</option><option value="buang">Buang halaman ini</option></select>
+    <input id="srange" placeholder="1-3, 5, 8-" autocomplete="off">
+    <button id="sgo" class="main">Buat PDF &amp; unduh</button>
+  </div>
+  <div class="pane" id="p-kompres" hidden>
+    <p>Memakai PDF yang sedang dibuka. Cocok untuk PDF hasil pindaian atau banyak foto. Teks pada hasil kompres tidak bisa lagi dicari atau diblok.</p>
+    <select id="kpre"><option value="ringan">Ringan (kualitas tinggi)</option><option value="sedang" selected>Sedang</option><option value="kuat">Kuat (ukuran terkecil)</option></select>
+    <button id="kgo" class="main">Kompres</button>
+    <button id="kdl" class="main" hidden>Unduh hasil</button>
+  </div>
+  <p id="st" role="status"></p>
+ </div>
+</div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 const $=id=>document.getElementById(id);
 const pc=$('pc'),ac=$('ac'),wrap=$('wrap'),stack=$('stack');
-let matches=[],mi=-1,tc={},lastQ='',busy=0,pdf=null,key='',page=1,zoom=1,tool='hand',color='#ffd400',ann={},rt=null,cur=null,drawing=false;
+let curBytes=null,curName='dokumen',matches=[],mi=-1,tc={},lastQ='',busy=0,pdf=null,key='',page=1,zoom=1,tool='hand',color='#ffd400',ann={},rt=null,cur=null,drawing=false;
 
 function store(){try{localStorage.setItem('pdfann:'+key,JSON.stringify({ann,page}))}catch(e){}}
 function restore(){try{return JSON.parse(localStorage.getItem('pdfann:'+key))||{}}catch(e){return{}}}
@@ -183,9 +224,9 @@ $('file').onchange=async e=>{
   const f=e.target.files[0];if(!f)return;
   try{
     const data=new Uint8Array(await f.arrayBuffer());
-    pdf=await pdfjsLib.getDocument({data}).promise;
+    pdf=await pdfjsLib.getDocument({data:data.slice()}).promise;curBytes=data;
   }catch(err){alert('File PDF tidak bisa dibuka.');return}
-  key=f.name+'|'+f.size;matches=[];mi=-1;tc={};lastQ='';$('fb').hidden=true;$('q').value='';$('fc').textContent='';
+  key=f.name+'|'+f.size;matches=[];mi=-1;tc={};curName=f.name.replace(/\.pdf$/i,'');kres=null;$('kdl').hidden=true;lastQ='';$('fb').hidden=true;$('q').value='';$('fc').textContent='';
   const s=restore();ann=s.ann||{};page=Math.min(s.page||1,pdf.numPages);zoom=1;
   $('empty').hidden=true;stack.hidden=false;
   render();
@@ -260,6 +301,112 @@ $('q').addEventListener('keydown',e=>{
   if(matches.length&&q===lastQ)show(mi+1);
   else{lastQ=q;runFind()}
 });
+
+const dlg=$('dlg'),st=$('st');
+let mg=[],kres=null;
+const kb=n=>n>=1048576?(n/1048576).toFixed(1)+' MB':Math.round(n/1024)+' KB';
+function say(t,err){st.textContent=t;st.style.color=err?'#d64545':''}
+function tab(n){
+  document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('on',b.dataset.tab===n));
+  document.querySelectorAll('.pane').forEach(p=>p.hidden=p.id!=='p-'+n);
+  say(n!=='gabung'&&!curBytes?'Buka sebuah PDF dulu di pembaca, lalu kembali ke sini.':'',n!=='gabung'&&!curBytes);
+}
+$('tl').onclick=()=>{dlg.hidden=false;tab(document.querySelector('[data-tab].on').dataset.tab)};
+$('dx').onclick=()=>{dlg.hidden=true};
+dlg.addEventListener('click',e=>{if(e.target===dlg)dlg.hidden=true});
+document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>tab(b.dataset.tab));
+function dl(bytes,name){
+  const u=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));
+  const a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(u),30000);
+}
+
+function drawList(){
+  const ul=$('mlist');ul.innerHTML='';
+  mg.forEach((f,i)=>{
+    const li=document.createElement('li'),sp=document.createElement('span');
+    sp.textContent=(i+1)+'. '+f.name+' ('+kb(f.bytes.length)+')';li.append(sp);
+    [['▲',()=>mv(i,-1)],['▼',()=>mv(i,1)],['✕',()=>{mg.splice(i,1);drawList()}]].forEach(([t,fn])=>{
+      const b=document.createElement('button');b.textContent=t;b.onclick=fn;li.append(b);
+    });
+    ul.append(li);
+  });
+  $('mgo').disabled=mg.length<2;
+}
+function mv(i,d){const j=i+d;if(j<0||j>=mg.length)return;[mg[i],mg[j]]=[mg[j],mg[i]];drawList()}
+$('mfile').onchange=async e=>{
+  for(const f of e.target.files)mg.push({name:f.name,bytes:new Uint8Array(await f.arrayBuffer())});
+  e.target.value='';drawList();say('');
+};
+$('mgo').onclick=async()=>{
+  try{
+    say('Menggabungkan…');
+    const out=await PDFLib.PDFDocument.create();
+    for(const f of mg){
+      const src=await PDFLib.PDFDocument.load(f.bytes);
+      (await out.copyPages(src,src.getPageIndices())).forEach(p=>out.addPage(p));
+    }
+    const b=await out.save();
+    dl(b,'gabungan.pdf');say('Selesai: '+kb(b.length)+'. Berkas diunduh.');
+  }catch(err){say('Gagal menggabung. Pastikan semua PDF tidak dikunci kata sandi.',true)}
+};
+
+function parseRange(t,n){
+  const out=[];
+  for(const tok of t.split(/[\s,;]+/).filter(Boolean)){
+    const m=tok.match(/^(\d*)-(\d*)$/);let a,b;
+    if(m&&(m[1]||m[2])){a=m[1]?+m[1]:1;b=m[2]?+m[2]:n}
+    else if(/^\d+$/.test(tok)){a=b=+tok}
+    else return null;
+    if(a<1||b>n||a>b)return null;
+    for(let i=a;i<=b;i++)if(!out.includes(i))out.push(i);
+  }
+  return out.length?out:null;
+}
+$('sgo').onclick=async()=>{
+  if(!curBytes)return say('Buka sebuah PDF dulu di pembaca.',true);
+  const n=pdf.numPages,r=parseRange($('srange').value,n);
+  if(!r)return say('Isian halaman belum benar. Contoh: 1-3, 5, 8- (total '+n+' halaman).',true);
+  let idx=r;
+  if($('smode').value==='buang'){
+    idx=[];for(let i=1;i<=n;i++)if(!r.includes(i))idx.push(i);
+    if(!idx.length)return say('Semua halaman akan terbuang.',true);
+  }
+  try{
+    say('Memproses…');
+    const src=await PDFLib.PDFDocument.load(curBytes),out=await PDFLib.PDFDocument.create();
+    (await out.copyPages(src,idx.map(i=>i-1))).forEach(p=>out.addPage(p));
+    const b=await out.save();
+    dl(b,curName+'-halaman.pdf');say(idx.length+' halaman, '+kb(b.length)+'. Berkas diunduh.');
+  }catch(err){say('Gagal memproses. PDF mungkin dikunci kata sandi.',true)}
+};
+
+const PRE={ringan:[150,0.75],sedang:[110,0.6],kuat:[80,0.45]};
+$('kgo').onclick=async()=>{
+  if(!curBytes)return say('Buka sebuah PDF dulu di pembaca.',true);
+  const [dpi,q]=PRE[$('kpre').value];
+  kres=null;$('kdl').hidden=true;$('kgo').disabled=true;
+  try{
+    const out=await PDFLib.PDFDocument.create();
+    const cv=document.createElement('canvas'),cx=cv.getContext('2d');
+    for(let n=1;n<=pdf.numPages;n++){
+      say('Memproses halaman '+n+' / '+pdf.numPages+'…');
+      const p=await pdf.getPage(n),v1=p.getViewport({scale:1}),v=p.getViewport({scale:dpi/72});
+      cv.width=Math.round(v.width);cv.height=Math.round(v.height);
+      cx.fillStyle='#fff';cx.fillRect(0,0,cv.width,cv.height);
+      await p.render({canvasContext:cx,viewport:v}).promise;
+      const blob=await new Promise(r=>cv.toBlob(r,'image/jpeg',q));
+      const img=await out.embedJpg(new Uint8Array(await blob.arrayBuffer()));
+      out.addPage([v1.width,v1.height]).drawImage(img,{x:0,y:0,width:v1.width,height:v1.height});
+    }
+    kres=await out.save();
+    const o=curBytes.length,r=kres.length;
+    say('Asli '+kb(o)+' → hasil '+kb(r)+(r<o?' (hemat '+Math.round((1-r/o)*100)+'%)':'. Hasil lebih besar dari asli, sebaiknya tidak dipakai.'),r>=o);
+    $('kdl').hidden=false;
+  }catch(err){say('Gagal mengompres.',true)}
+  $('kgo').disabled=false;
+};
+$('kdl').onclick=()=>{if(kres)dl(kres,curName+'-kompres.pdf')};
 
 let rz;
 window.addEventListener('resize',()=>{clearTimeout(rz);rz=setTimeout(render,250)});
