@@ -18,7 +18,7 @@ button.on{background:var(--ac);color:var(--on);border-color:var(--ac)}
 .sw{width:34px;min-width:34px;height:34px;min-height:34px;aspect-ratio:1/1;padding:0;border-radius:50%;border:2px solid var(--bd)}
 .sw.on{outline:3px solid var(--ac);outline-offset:1px;background:inherit}
 .sp{width:1px;align-self:stretch;background:var(--bd);margin:0 2px;flex:none}
-#wrap{flex:1;overflow:auto;padding:8px;-webkit-overflow-scrolling:touch}
+#wrap{position:relative;flex:1;overflow:auto;padding:8px;-webkit-overflow-scrolling:touch}
 .stack{position:relative;width:fit-content;margin:0 auto;box-shadow:0 2px 12px rgba(0,0,0,.25);background:#fff}
 canvas{display:block}
 #ac{position:absolute;left:0;top:0;mix-blend-mode:multiply}
@@ -26,7 +26,11 @@ canvas{display:block}
 #empty h1{font-size:20px;margin:0 0 8px}
 #empty p{margin:0 0 18px;opacity:.75}
 .big{background:var(--ac);color:var(--on);border-color:var(--ac);font-size:16px;padding:12px 22px;display:inline-block}
-#lbl{min-width:70px;text-align:center}
+[hidden]{display:none!important}
+input{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--bd);border-radius:10px;padding:8px 10px;min-height:40px;min-width:0}
+#pg{width:64px;text-align:center;flex:none}
+#q{flex:1 1 140px}
+#tot,#fc{flex:none;white-space:nowrap;opacity:.8}
 </style>
 </head>
 <body>
@@ -42,9 +46,15 @@ canvas{display:block}
   <button class="sw" data-c="#e02020" style="background:#e02020" aria-label="Merah"></button>
   <button class="sw" data-c="#1f4fd8" style="background:#1f4fd8" aria-label="Biru"></button>
   <span class="sp"></span>
+  <button id="find">Cari</button>
   <button id="undo">Urungkan</button>
   <label class="btn" for="file">Buka PDF</label>
   <input id="file" type="file" accept="application/pdf" hidden>
+</div>
+<div class="bar" id="fb" hidden>
+  <input id="q" type="search" placeholder="Cari teks di PDF" enterkeyhint="search" autocomplete="off">
+  <button id="fp" aria-label="Sebelumnya">‹</button><button id="fn" aria-label="Berikutnya">›</button>
+  <span id="fc"></span><button id="fx">Tutup</button>
 </div>
 <div id="wrap">
   <div id="empty">
@@ -55,7 +65,7 @@ canvas{display:block}
   <div class="stack" id="stack" hidden><canvas id="pc"></canvas><canvas id="ac"></canvas></div>
 </div>
 <div class="bar bot">
-  <button id="prev">‹</button><span id="lbl">–</span><button id="next">›</button>
+  <button id="prev">‹</button><input id="pg" type="number" inputmode="numeric" min="1" aria-label="Halaman"><span id="tot">/ 0</span><button id="next">›</button>
   <span class="sp"></span>
   <button id="zo">−</button><button id="zi">+</button>
 </div>
@@ -66,7 +76,7 @@ canvas{display:block}
 pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 const $=id=>document.getElementById(id);
 const pc=$('pc'),ac=$('ac'),wrap=$('wrap'),stack=$('stack');
-let pdf=null,key='',page=1,zoom=1,tool='hand',color='#ffd400',ann={},rt=null,cur=null,drawing=false;
+let matches=[],mi=-1,tc={},lastQ='',busy=0,pdf=null,key='',page=1,zoom=1,tool='hand',color='#ffd400',ann={},rt=null,cur=null,drawing=false;
 
 function store(){try{localStorage.setItem('pdfann:'+key,JSON.stringify({ann,page}))}catch(e){}}
 function restore(){try{return JSON.parse(localStorage.getItem('pdfann:'+key))||{}}catch(e){return{}}}
@@ -82,7 +92,7 @@ async function render(){
   rt=p.render({canvasContext:pc.getContext('2d'),viewport:v});
   try{await rt.promise}catch(e){return}
   draw();
-  $('lbl').textContent=page+' / '+pdf.numPages;
+  $('pg').value=page;$('tot').textContent='/ '+pdf.numPages;
   store();
 }
 
@@ -98,6 +108,8 @@ function drawOne(a,x){
 }
 function draw(){
   const x=ac.getContext('2d');x.clearRect(0,0,ac.width,ac.height);
+  const W=ac.width,H=ac.height;
+  matches.forEach((m,i)=>{if(m.page!==page)return;x.fillStyle=i===mi?'#ff7a00':'#ffd400';x.globalAlpha=i===mi?0.55:0.4;m.rects.forEach(r=>x.fillRect(r.x*W,r.y*H,r.w*W,r.h*H));x.globalAlpha=1});
   (ann[page]||[]).forEach(a=>drawOne(a,x));
   if(cur)drawOne(cur,x);
 }
@@ -162,6 +174,7 @@ $('next').onclick=()=>go(page+1);
 $('zi').onclick=()=>{zoom=Math.min(3,zoom+0.25);render()};
 $('zo').onclick=()=>{zoom=Math.max(0.5,zoom-0.25);render()};
 document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT')return;
   if(e.key==='ArrowRight')go(page+1);
   if(e.key==='ArrowLeft')go(page-1);
 });
@@ -172,12 +185,81 @@ $('file').onchange=async e=>{
     const data=new Uint8Array(await f.arrayBuffer());
     pdf=await pdfjsLib.getDocument({data}).promise;
   }catch(err){alert('File PDF tidak bisa dibuka.');return}
-  key=f.name+'|'+f.size;
+  key=f.name+'|'+f.size;matches=[];mi=-1;tc={};lastQ='';$('fb').hidden=true;$('q').value='';$('fc').textContent='';
   const s=restore();ann=s.ann||{};page=Math.min(s.page||1,pdf.numPages);zoom=1;
   $('empty').hidden=true;stack.hidden=false;
   render();
   e.target.value='';
 };
+
+$('pg').addEventListener('change',()=>{const n=parseInt($('pg').value,10);if(n)go(n);else $('pg').value=page});
+$('pg').addEventListener('keydown',e=>{if(e.key==='Enter')e.target.blur()});
+$('pg').addEventListener('focus',e=>e.target.select());
+
+async function getText(n){
+  if(tc[n])return tc[n];
+  const p=await pdf.getPage(n),v=p.getViewport({scale:1}),t=await p.getTextContent();
+  let s='';const segs=[];
+  for(const it of t.items){
+    if(!it.str)continue;
+    const tr=it.transform,pt=v.convertToViewportPoint(tr[4],tr[5]);
+    const h=it.height||Math.hypot(tr[2],tr[3]);
+    segs.push({s0:s.length,len:it.str.length,x:pt[0]/v.width,y:(pt[1]-h)/v.height,w:it.width/v.width,h:h/v.height});
+    s+=it.str;
+    if(it.hasEOL)s+=' ';
+  }
+  return tc[n]={s:s.toLowerCase(),segs};
+}
+async function runFind(){
+  const q=$('q').value.trim().toLowerCase();
+  const id=++busy;matches=[];mi=-1;draw();
+  if(!q||!pdf){$('fc').textContent='';return}
+  let chars=0;
+  for(let n=1;n<=pdf.numPages;n++){
+    const t=await getText(n);if(id!==busy)return;
+    chars+=t.s.length;
+    let i=t.s.indexOf(q);
+    while(i>=0){
+      const j=i+q.length,rects=[];
+      for(const g of t.segs){
+        const lo=Math.max(i,g.s0),hi=Math.min(j,g.s0+g.len);
+        if(hi>lo)rects.push({x:g.x+g.w*((lo-g.s0)/g.len),y:g.y,w:g.w*((hi-lo)/g.len),h:g.h});
+      }
+      if(rects.length)matches.push({page:n,rects});
+      i=t.s.indexOf(q,j);
+    }
+    if(n%10===0)$('fc').textContent='Mencari… '+n+'/'+pdf.numPages;
+  }
+  if(id!==busy)return;
+  if(!matches.length){$('fc').textContent=chars?'Tidak ada':'PDF berupa gambar, teks tidak bisa dicari';draw();return}
+  const k=matches.findIndex(m=>m.page>=page);
+  show(k>=0?k:0);
+}
+async function show(i){
+  if(!matches.length)return;
+  mi=(i+matches.length)%matches.length;
+  const m=matches[mi];
+  $('fc').textContent=(mi+1)+' / '+matches.length;
+  if(m.page!==page){page=m.page;await render()}else draw();
+  const r=m.rects[0];
+  wrap.scrollTo({top:stack.offsetTop+r.y*ac.clientHeight-wrap.clientHeight/3,left:stack.offsetLeft+r.x*ac.clientWidth-wrap.clientWidth/3,behavior:'smooth'});
+}
+function closeFind(){busy++;matches=[];mi=-1;lastQ='';$('fc').textContent='';draw()}
+$('find').onclick=()=>{
+  if(!pdf)return;
+  const b=$('fb');b.hidden=!b.hidden;
+  if(b.hidden)closeFind();else $('q').focus();
+};
+$('fx').onclick=()=>{$('fb').hidden=true;closeFind()};
+$('fn').onclick=()=>show(mi+1);
+$('fp').onclick=()=>show(mi-1);
+$('q').addEventListener('keydown',e=>{
+  if(e.key!=='Enter')return;
+  e.preventDefault();
+  const q=$('q').value.trim().toLowerCase();
+  if(matches.length&&q===lastQ)show(mi+1);
+  else{lastQ=q;runFind()}
+});
 
 let rz;
 window.addEventListener('resize',()=>{clearTimeout(rz);rz=setTimeout(render,250)});
